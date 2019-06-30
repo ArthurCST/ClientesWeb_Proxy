@@ -4,6 +4,7 @@ import random
 import math
 import simpy
 import time
+import numpy as np
 
 
 #parametros
@@ -21,8 +22,11 @@ numClientes = 150
 porcetangemAtiva = 0.1
 reqHttp = 290 #tamanho médio da requisição HTTP
 
-taxaDisco = 6 #taxa em ms por Kbyte
-hit_rate = 0.8 #taxa de hit rate
+resposta_cliente = []
+taxaDisco = 6 #ms
+taxaCPU_hit = 0.25 #ms
+taxaCPU_miss = 2*taxaCPU_hit #ms
+hit_rate = 0.75 #taxa de hit rate
 
 #retorna o número de datagramas necessários para enviar uma mensagem com m bytes
 def nDatagramas(m):
@@ -60,14 +64,14 @@ class Web(object):
 
 #Serviço LAN HTTP Request
 
-    def proxyCPU(self, cliente, tamDoc, aleatorio):
+    def proxyCPU(self, cliente, aleatorio):
         if(aleatorio <= hit_rate):
-            yield self.env.timeout(0.25)
+            yield self.env.timeout(taxaCPU_hit/1000)
         else:
-            yield self.env.timeout(0.5)
+            yield self.env.timeout(taxaCPU_miss/1000)
     
     def proxyDisco(self, cliente, tamDoc):
-        yield self.env.timeout(taxaDisco * tamDoc)
+        yield self.env.timeout((taxaDisco/1000) * tamDoc)
 
     #Serviço LAN HTTP Request
     def lanReq(self, cliente,tamDoc):
@@ -185,7 +189,7 @@ def cliente(env, nome, web):
 
             startService = env.now
             print("[FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
-            yield env.process(web.proxyCPU(nome, tamDoc, aleatorio))
+            yield env.process(web.proxyCPU(nome, aleatorio))
             AUX_SERVICE_TIME_CPUproxy += env.now - startService
 
         startWait = env.now
@@ -193,12 +197,12 @@ def cliente(env, nome, web):
         if CURRENT_Q_DISCOproxy > LONGEST_Q_DISCOproxy:
             LONGEST_Q_DISCOproxy = CURRENT_Q_DISCOproxy
         
-        with web.qDISCOproxy.request() as request_DISCOproxy: #fila de requisição nO proxy DISCO
+        with web.qDISCOproxy.request() as request_DISCOproxy: #fila de requisição no proxy DISCO
+            print("fila: ", CURRENT_Q_DISCOproxy)
             yield request_DISCOproxy
             #disco sera usado
             AUX_WAIT_TIME_DISCOproxy += env.now - startWait
             CURRENT_Q_DISCOproxy -= 1
-
             startService = env.now
             yield env.process(web.proxyDisco(nome, tamDoc))
             AUX_SERVICE_TIME_DISCOproxy += env.now - startService
@@ -219,7 +223,7 @@ def cliente(env, nome, web):
 
             startService = env.now
             print("[NOT FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
-            yield env.process(web.proxyCPU(nome, tamDoc, aleatorio))
+            yield env.process(web.proxyCPU(nome, aleatorio))
             print("[NOT FOUND] cliente %s terminando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
             AUX_SERVICE_TIME_CPUproxy += env.now - startService
 
@@ -277,7 +281,7 @@ def cliente(env, nome, web):
         with web.qlanReq.request() as request_lan:#fila na lan resposta
             yield request_lan
             #cliente sera servido
-            AUX_WAIT_TIME_LAN += env.now - startWait;
+            AUX_WAIT_TIME_LAN += env.now - startWait
             CURRENT_Q_LAN -= 1
             startService = env.now
             yield env.process(web.lanResp(nome,tamDoc))
@@ -285,6 +289,7 @@ def cliente(env, nome, web):
             print('cliente %s servido na lan (resposta) tempo %.2f.' % (nome, env.now))
         TOTAL_END_MISS+=1
     print('cliente %s saiu no tempo %.2f.' % (nome, env.now))
+    resposta_cliente.append(env.now)
     TOTAL_DEPARTURES += 1
 
     #Adiciona o valor dos tempos de serviço e espera do cliente em cada recurso às variáveis globais de estatística
@@ -384,6 +389,7 @@ print("Tempo de residencia Roteador %f"%TOTAL_SERVICE_TIME_ROT)
 print("Tempo de residencia Link de Saída %f"%TOTAL_RESIDENCE_TIME_LS)
 print("Tempo de residencia Internet %f"%TOTAL_SERVICE_TIME_ISP)
 print("Tempo de residencia Link de Entrada %f"%TOTAL_RESIDENCE_TIME_LE)
+print("Tempo de residencia proxy %f"%TOTAL_RESIDENCE_TIME_PROXY)
 print("Tempo de residencia total %f"%TOTAL_RESIDENCE_TIME)
 
 print("Utilização LAN %f"%(TOTAL_RESIDENCE_TIME_LAN/TOTAL_RESIDENCE_TIME*100))
@@ -396,8 +402,9 @@ print("Utilização Proxy Disco %f"%(TOTAL_RESIDENCE_TIME_DISCOproxy/TOTAL_RESID
 
 print("Taxa de Processamento: %f"%(TOTAL_DEPARTURES/TOTAL_RESIDENCE_TIME))
 
-
-
+#print(resposta_cliente)
+print("Media do tempo de resposta ao cliente: ", np.mean(resposta_cliente))
+print("Desvio padrão do tempo de resposta ao cliente: ", np.std(resposta_cliente))
 
 print("HIT: %f"%TOTAL_HIT)
 print("HIT _ END: %f"%TOTAL_END_HIT)

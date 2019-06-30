@@ -3,6 +3,7 @@
 import random
 import math
 import simpy
+import numpy as np
 
 
 #parametros
@@ -19,6 +20,8 @@ taxabrowser = 0.3 #pedidos/segundo
 numClientes = 150
 porcetangemAtiva = 0.1
 reqHttp = 290 #tamanho médio da requisição HTTP
+
+resposta_cliente = []
 
 
 #retorna o número de datagramas necessários para enviar uma mensagem com m bytes
@@ -197,6 +200,7 @@ def cliente(env, nome, web):
         print('cliente %s servido na lan (resposta) tempo %.2f.' % (nome, env.now))
 
     print('cliente %s saiu no tempo %.2f.' % (nome, env.now))
+    resposta_cliente.append(env.now)
     TOTAL_DEPARTURES += 1
 
     #Adiciona o valor dos tempos de serviço e espera do cliente em cada recurso às variáveis globais de estatística
@@ -276,3 +280,6 @@ print("Utilização Link de Saída %f"%(TOTAL_RESIDENCE_TIME_LS/TOTAL_RESIDENCE_
 print("Utilização Internet %f"%(TOTAL_RESIDENCE_TIME_ISP/TOTAL_RESIDENCE_TIME*100))
 print("Utilização Link de Entrada %f"%(TOTAL_RESIDENCE_TIME_LE/TOTAL_RESIDENCE_TIME*100))
 print("Taxa de Processamento: %f"%(TOTAL_DEPARTURES/TOTAL_RESIDENCE_TIME))
+
+print("Media do tempo de resposta ao cliente: ", np.mean(resposta_cliente))
+print("Desvio padrão do tempo de resposta ao cliente: ", np.std(resposta_cliente))
