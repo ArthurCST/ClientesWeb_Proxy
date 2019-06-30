@@ -14,7 +14,7 @@ ovhdIP = 20 #overhead IP
 ovhdFrame = 18 #overhead Frame
 larguraBanda = 10#Mbps
 latenciaRot = 50#us
-larguraBandaLink = 0.056#Mbps
+larguraBandaLink = 1.554#Mbps
 taxaDadosDoc = 20#KBps
 rtt = 100#ms
 taxabrowser = 0.3#pedidos/segundo
@@ -26,7 +26,7 @@ resposta_cliente = []
 taxaDisco = 6 #ms
 taxaCPU_hit = 0.25 #ms
 taxaCPU_miss = 2*taxaCPU_hit #ms
-hit_rate = 0.75 #taxa de hit rate
+hit_rate = 0.7 #taxa de hit rate
 
 #retorna o número de datagramas necessários para enviar uma mensagem com m bytes
 def nDatagramas(m):
