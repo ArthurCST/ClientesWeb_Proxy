@@ -21,6 +21,8 @@ numClientes = 150
 porcetangemAtiva = 0.1
 reqHttp = 290 #tamanho médio da requisição HTTP
 
+taxaDisco = 6 #taxa em ms por Kbyte
+hit_rate = 0.8 #taxa de hit rate
 
 #retorna o número de datagramas necessários para enviar uma mensagem com m bytes
 def nDatagramas(m):
@@ -48,19 +50,24 @@ def tamanhoDoc():
 
 #Classe principal da simulação.
 class Web(object):
-    def __init__(self, env, num_lan, num_linkSai , num_linkEnt):
+    def __init__(self, env, num_lan, num_linkSai , num_linkEnt, num_cpu, num_disco):
         self.env = env
         self.qlanReq = simpy.Resource(env,num_lan)
         self.qlinkSai = simpy.Resource(env,num_linkSai)
         self.qlinkEnt = simpy.Resource(env, num_linkEnt)
+        self.qCPUproxy = simpy.Resource(env, num_cpu)
+        self.qDISCOproxy = simpy.Resource(env, num_disco)
 
 #Serviço LAN HTTP Request
 
-    def proxyReq(self, cliente, tamDoc, aleatorio):
-        if(aleatorio <= 0.5):
-            yield self.env.timeout(0.25 + (6/100) * tamDoc)
+    def proxyCPU(self, cliente, tamDoc, aleatorio):
+        if(aleatorio <= hit_rate):
+            yield self.env.timeout(0.25)
         else:
             yield self.env.timeout(0.5)
+    
+    def proxyDisco(self, cliente, tamDoc):
+        yield self.env.timeout(taxaDisco * tamDoc)
 
     #Serviço LAN HTTP Request
     def lanReq(self, cliente,tamDoc):
@@ -109,10 +116,19 @@ def cliente(env, nome, web):
     global LONGEST_Q_LINKSAIDA
     global CURRENT_Q_LINKENTRADA
     global LONGEST_Q_LINKENTRADA
+    
     global TOTAL_HIT
     global TOTAL_END_HIT
     global TOTAL_MISS
     global TOTAL_END_MISS
+    global TOTAL_SERVICE_TIME_DISCOproxy
+    global TOTAL_WAIT_TIME_DISCOproxy
+    global CURRENT_Q_DISCOproxy
+    global LONGEST_Q_DISCOproxy
+    global TOTAL_SERVICE_TIME_CPUproxy
+    global TOTAL_WAIT_TIME_CPUproxy
+    global CURRENT_Q_CPUproxy
+    global LONGEST_Q_CPUproxy
 
     #variaveis auxiliares para cálculo de estatisticas
     AUX_SERVICE_TIME_LAN = 0
@@ -123,9 +139,13 @@ def cliente(env, nome, web):
     AUX_SERVICE_TIME_ISP = 0
     AUX_SERVICE_TIME_LE = 0
     AUX_WAIT_TIME_LE = 0
+    AUX_SERVICE_TIME_DISCOproxy = 0
+    AUX_WAIT_TIME_DISCOproxy = 0
+    AUX_SERVICE_TIME_CPUproxy = 0
+    AUX_WAIT_TIME_CPUproxy = 0
     startService = 0
     startWait = 0
-
+    
     TOTAL_ARRIVALS += 1
     tamDoc = tamanhoDoc()
     #tamDoc = 22.23
@@ -139,7 +159,7 @@ def cliente(env, nome, web):
     with web.qlanReq.request() as request_lan:#fila na lan requisição
         yield request_lan
         #cliente sera servido
-        AUX_WAIT_TIME_LAN += env.now - startWait;
+        AUX_WAIT_TIME_LAN += env.now - startWait
         CURRENT_Q_LAN -= 1
 
         startService = env.now
@@ -149,18 +169,60 @@ def cliente(env, nome, web):
 
     #random.seed(time.time())
     aleatorio = random.random()
-    if(aleatorio <= 0.5):
+    if(aleatorio <= hit_rate):
         TOTAL_HIT+=1
-        print("[FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
-        yield env.process(web.proxyReq(nome, tamDoc, aleatorio))
-        print("[END_FOUND] cliente %s terminando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
+        
+        startWait = env.now
+        CURRENT_Q_CPUproxy += 1
+        if CURRENT_Q_CPUproxy > LONGEST_Q_CPUproxy:
+            LONGEST_Q_CPUproxy = CURRENT_Q_CPUproxy
+
+        with web.qCPUproxy.request() as request_CPUproxy:#fila de requisição na proxy CPU
+            yield request_CPUproxy
+            #cpu sera usada
+            AUX_WAIT_TIME_CPUproxy += env.now - startWait
+            CURRENT_Q_CPUproxy -= 1
+
+            startService = env.now
+            print("[FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
+            yield env.process(web.proxyCPU(nome, tamDoc, aleatorio))
+            AUX_SERVICE_TIME_CPUproxy += env.now - startService
+
+        startWait = env.now
+        CURRENT_Q_DISCOproxy += 1
+        if CURRENT_Q_DISCOproxy > LONGEST_Q_DISCOproxy:
+            LONGEST_Q_DISCOproxy = CURRENT_Q_DISCOproxy
+        
+        with web.qDISCOproxy.request() as request_DISCOproxy: #fila de requisição nO proxy DISCO
+            yield request_DISCOproxy
+            #disco sera usado
+            AUX_WAIT_TIME_DISCOproxy += env.now - startWait
+            CURRENT_Q_DISCOproxy -= 1
+
+            startService = env.now
+            yield env.process(web.proxyDisco(nome, tamDoc))
+            AUX_SERVICE_TIME_DISCOproxy += env.now - startService
+            print("[END_FOUND] cliente %s terminando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
         TOTAL_END_HIT+=1
     else:
         TOTAL_MISS+=1
-        print("[NOT FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
-        yield env.process(web.proxyReq(nome, tamDoc, aleatorio))
-        print("[NOT FOUND] cliente %s terminando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
-        
+        startWait = env.now
+        CURRENT_Q_CPUproxy += 1
+        if CURRENT_Q_CPUproxy > LONGEST_Q_CPUproxy:
+            LONGEST_Q_CPUproxy = CURRENT_Q_CPUproxy
+
+        with web.qCPUproxy.request() as request_CPUproxy:#fila de requisição na proxy CPU
+            yield request_CPUproxy
+            #cpu sera usada
+            AUX_WAIT_TIME_CPUproxy += env.now - startWait
+            CURRENT_Q_CPUproxy -= 1
+
+            startService = env.now
+            print("[NOT FOUND] cliente %s começando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
+            yield env.process(web.proxyCPU(nome, tamDoc, aleatorio))
+            print("[NOT FOUND] cliente %s terminando a busca do contéudo no cache do proxy em %.2f." % (nome, env.now))
+            AUX_SERVICE_TIME_CPUproxy += env.now - startService
+
         startService = env.now
         yield env.process(web.rotReq(nome, tamDoc))#delay roteador
         AUX_SERVICE_TIME_ROT += env.now - startService
@@ -235,14 +297,19 @@ def cliente(env, nome, web):
     TOTAL_SERVICE_TIME_LE += AUX_SERVICE_TIME_LE
     TOTAL_WAIT_TIME_LE += AUX_WAIT_TIME_LE
 
+    TOTAL_SERVICE_TIME_CPUproxy += AUX_SERVICE_TIME_CPUproxy
+    TOTAL_WAIT_TIME_CPUproxy += AUX_WAIT_TIME_CPUproxy
+    TOTAL_SERVICE_TIME_DISCOproxy += AUX_SERVICE_TIME_DISCOproxy
+    TOTAL_WAIT_TIME_DISCOproxy += AUX_WAIT_TIME_DISCOproxy
+
     """
     with web.qlanResp.request() as request_lanr:#fila na lan requisição
         yield request_lanr
         yield env.process(web.lanResp(nome, tamDoc))
         print('cliente %s saiu no tempo %.2f.' % (nome, env.now))    """
 
-def setup(env, num_lan, num_linkSai , num_linkEnt ):
-    web = Web(env, num_lan, num_linkSai , num_linkEnt)
+def setup(env, num_lan, num_linkSai , num_linkEnt, num_cpu, num_disco):
+    web = Web(env, num_lan, num_linkSai , num_linkEnt, num_cpu, num_disco)
     i = 0
     while 1:
         yield env.timeout(0.2)
@@ -267,6 +334,17 @@ CURRENT_Q_LINKSAIDA = 0 #tamanho atual da fila Link de Saida
 LONGEST_Q_LINKSAIDA = 0 #tamanho da maior da fila Link de Saida
 CURRENT_Q_LINKENTRADA = 0 #tamanho atual da fila Link de Entrada
 LONGEST_Q_LINKENTRADA = 0 #tamanho da maior da fila Link de Entrada
+
+CURRENT_Q_DISCOproxy = 0 #tamanho da fila atual proxy Disco
+LONGEST_Q_DISCOproxy = 0 #tamanho da maior fila proxy Disco
+CURRENT_Q_CPUproxy = 0 #tamanho da fila atual proxy CPU
+LONGEST_Q_CPUproxy = 0 #tamanho da maior fila proxy CPU
+
+TOTAL_SERVICE_TIME_CPUproxy  = 0 #tempo total de serviço Proxy CPU
+TOTAL_WAIT_TIME_CPUproxy = 0 #tempo total de espera Proxy CPU
+TOTAL_SERVICE_TIME_DISCOproxy  = 0 #tempo total de serviço Proxy DISCO
+TOTAL_WAIT_TIME_DISCOproxy = 0 #tempo total de espera Proxy DISCO
+
 TOTAL_HIT = 0
 TOTAL_END_HIT = 0
 TOTAL_MISS = 0
@@ -276,18 +354,26 @@ SIM_TIME = 12
 NUM_LINKSAI= 1
 NUM_LAN  = 1
 NUM_LINKENT = 1
+NUM_CPU = 1
+NUM_DISCO = 1
 random.seed(120)
 
 env = simpy.Environment()
-env.process(setup(env, NUM_LAN, NUM_LINKSAI , NUM_LINKENT ))
+env.process(setup(env, NUM_LAN, NUM_LINKSAI , NUM_LINKENT, NUM_CPU, NUM_DISCO))
 env.run(until = SIM_TIME)
 
 """Tempos totais de residência para cada recurso"""
+TOTAL_RESIDENCE_TIME_CPUproxy = TOTAL_SERVICE_TIME_CPUproxy + TOTAL_WAIT_TIME_CPUproxy
+TOTAL_RESIDENCE_TIME_DISCOproxy = TOTAL_SERVICE_TIME_DISCOproxy + TOTAL_WAIT_TIME_DISCOproxy
+TOTAL_RESIDENCE_TIME_PROXY = TOTAL_RESIDENCE_TIME_CPUproxy + TOTAL_RESIDENCE_TIME_DISCOproxy
+
 TOTAL_RESIDENCE_TIME_LAN = TOTAL_SERVICE_TIME_LAN + TOTAL_WAIT_TIME_LAN
 TOTAL_RESIDENCE_TIME_LS = TOTAL_SERVICE_TIME_LS + TOTAL_WAIT_TIME_LS
 TOTAL_RESIDENCE_TIME_ISP = TOTAL_SERVICE_TIME_ISP
 TOTAL_RESIDENCE_TIME_LE = TOTAL_SERVICE_TIME_LE + TOTAL_WAIT_TIME_LE
-TOTAL_RESIDENCE_TIME = TOTAL_RESIDENCE_TIME_LAN+TOTAL_SERVICE_TIME_ROT+TOTAL_RESIDENCE_TIME_ISP + TOTAL_RESIDENCE_TIME_LS+TOTAL_RESIDENCE_TIME_LE
+TOTAL_RESIDENCE_TIME_NET = TOTAL_SERVICE_TIME_ROT+TOTAL_RESIDENCE_TIME_ISP + TOTAL_RESIDENCE_TIME_LS+TOTAL_RESIDENCE_TIME_LE
+
+TOTAL_RESIDENCE_TIME = TOTAL_RESIDENCE_TIME_LAN+TOTAL_SERVICE_TIME_ROT+TOTAL_RESIDENCE_TIME_ISP + TOTAL_RESIDENCE_TIME_LS+TOTAL_RESIDENCE_TIME_LE+TOTAL_RESIDENCE_TIME_PROXY
 
 """Relatório estatístico"""
 print("ESTATISTICAS GERAIS")
@@ -299,12 +385,19 @@ print("Tempo de residencia Link de Saída %f"%TOTAL_RESIDENCE_TIME_LS)
 print("Tempo de residencia Internet %f"%TOTAL_SERVICE_TIME_ISP)
 print("Tempo de residencia Link de Entrada %f"%TOTAL_RESIDENCE_TIME_LE)
 print("Tempo de residencia total %f"%TOTAL_RESIDENCE_TIME)
+
 print("Utilização LAN %f"%(TOTAL_RESIDENCE_TIME_LAN/TOTAL_RESIDENCE_TIME*100))
 print("Utilização Roteador %f"%(TOTAL_SERVICE_TIME_ROT/TOTAL_RESIDENCE_TIME*100))
 print("Utilização Link de Saída %f"%(TOTAL_RESIDENCE_TIME_LS/TOTAL_RESIDENCE_TIME*100))
 print("Utilização Internet %f"%(TOTAL_RESIDENCE_TIME_ISP/TOTAL_RESIDENCE_TIME*100))
 print("Utilização Link de Entrada %f"%(TOTAL_RESIDENCE_TIME_LE/TOTAL_RESIDENCE_TIME*100))
+print("Utilização Proxy CPU %f"%(TOTAL_RESIDENCE_TIME_CPUproxy/TOTAL_RESIDENCE_TIME*100))
+print("Utilização Proxy Disco %f"%(TOTAL_RESIDENCE_TIME_DISCOproxy/TOTAL_RESIDENCE_TIME*100))
+
 print("Taxa de Processamento: %f"%(TOTAL_DEPARTURES/TOTAL_RESIDENCE_TIME))
+
+
+
 
 print("HIT: %f"%TOTAL_HIT)
 print("HIT _ END: %f"%TOTAL_END_HIT)
